@@ -39,6 +39,7 @@ func randomValueInt(mean, stddev float64, lowest int) int {
 type ticket struct {
 	startday int
 	endday   int
+	leadtime int
 	effort   int
 	// burndown the remaining effort of a ticket at a day.
 	// The day is the index in the array.
@@ -53,6 +54,16 @@ func NewTicket(startday, effort, totaldays int) *ticket {
 	t.burndown = make([]int, totaldays)
 	t.burndown[startday] = effort
 	return &t
+}
+
+// Clone create a deep copy of a ticket
+func (t *ticket) Clone() *ticket {
+	cp := ticket{}
+	cp.startday = t.startday
+	cp.effort = t.effort
+	cp.burndown = make([]int, 0, len(t.burndown))
+	cp.burndown = append(cp.burndown, t.burndown...)
+	return &cp
 }
 
 // createTicketsForDay create count new tickets for a day with random effort
@@ -75,6 +86,30 @@ func createTicketsForDay(d, days, count int, meanEffortNew, stddevEffortNew floa
 	return tickets, sumEffort
 }
 
+// burndown burn down a ticket, max for the given hours and return updated hoursleft
+func (t *ticket) burndownhours(day, hoursleft, hours int) int {
+	d1 := day + 1
+	workremain := t.burndown[day]
+	if workremain > 0 {
+		// calculate possible burndown
+		if hoursleft > 0 {
+			if workremain < hours {
+				hours = workremain
+			}
+			if hoursleft < hours {
+				hours = hoursleft
+			}
+			workremain -= hours
+			hoursleft -= hours
+		}
+		// update ticket stats for actual day for ticket in work
+		t.endday = day
+		t.leadtime = d1 - t.startday
+	}
+	t.burndown[d1] = workremain
+	return hoursleft
+}
+
 // simulation the set of all tickets
 type simulation []*ticket
 
@@ -87,6 +122,52 @@ func (sim simulation) String() string {
 	return buf.String()
 }
 
+// addTickets add a copy of the given tickets to the simulation
+func (sim simulation) addTickets(ts []*ticket) simulation {
+	s := sim
+	for _, t := range ts {
+		tcp := t.Clone()
+		s = append(s, tcp)
+	}
+	return s
+}
+
+// workhoursday working hours per day
+const workhoursday = 8
+
+// burndownMaxWip burn down maximum number of tickets, each 2h for a day
+func (sim *simulation) burndownMaxWip(day int) {
+	d1 := day + 1
+	// no burndown without ticket or on last day
+	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
+		return
+	}
+	hourswork := 2
+	hoursleft := workhoursday
+	for _, t := range *sim {
+		hoursleft = t.burndownhours(day, hoursleft, hourswork)
+	}
+	if hoursleft > 0 {
+		// burn hours left
+		for _, t := range *sim {
+			hoursleft = t.burndownhours(day, hoursleft, hoursleft)
+		}
+	}
+}
+
+// burndownMinWip burn down the oldest tickets first
+func (sim *simulation) burndownMinWip(day int) {
+	d1 := day + 1
+	// no burndown without ticket or on last day
+	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
+		return
+	}
+	hoursleft := workhoursday
+	for _, t := range *sim {
+		hoursleft = t.burndownhours(day, hoursleft, hoursleft)
+	}
+}
+
 func main() {
 	days := 20
 	meanNewPerDay := 1.0
@@ -96,20 +177,29 @@ func main() {
 	stddevEffortNew := 4.0
 	minEffort := 1
 	sumEffort := 0
-	simulation := make(simulation, 0, days*3/2)
+	simMaxWip := make(simulation, 0, days*3/2)
+	simMinWip := make(simulation, 0, days*3/2)
 	for d := 0; d < days; d++ {
 		count := randomValueInt(meanNewPerDay, stddevNewPerDay, 0)
 		sumCount += count
 		tickets, effort := createTicketsForDay(d, days, count,
 			meanEffortNew, stddevEffortNew, minEffort)
-		simulation = append(simulation, tickets...)
+		simMaxWip = simMaxWip.addTickets(tickets)
+		simMaxWip.burndownMaxWip(d)
+		simMinWip = simMinWip.addTickets(tickets)
+		simMinWip.burndownMinWip(d)
 		sumEffort += effort
 
 	}
 	fmt.Println()
-	fmt.Println(simulation)
 	meanCount := float64(sumCount) / float64(days)
 	fmt.Println("mean count:", meanCount)
 	meanEffort := float64(sumEffort) / float64(days)
 	fmt.Println("mean effort:", meanEffort)
+	fmt.Println()
+	fmt.Println("Max WIP")
+	fmt.Println(simMaxWip)
+	fmt.Println()
+	fmt.Println("Min WIP")
+	fmt.Println(simMinWip)
 }
