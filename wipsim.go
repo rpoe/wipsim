@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 )
 
 // randomValueInt calculates a random int value from a
@@ -132,6 +133,24 @@ func (sim simulation) addTickets(ts []*ticket) simulation {
 	return s
 }
 
+// statsLeadTime return average and standard deviation
+// and sum of mean and stdev of tickets leadtime
+func (sim simulation) statsLeadTime() (float64, float64, float64) {
+	var sum float64 = 0.0
+	var sumSq float64 = 0.0
+	for _, t := range sim {
+		l := float64(t.leadtime)
+		sum += l
+		sumSq += l * l
+	}
+	// calculate the mean/std.dev
+	l := float64(len(sim))
+	meanSq := sumSq / l
+	mean := sum / l
+	stdev := math.Sqrt(meanSq - mean*mean)
+	return mean, stdev, mean + stdev
+}
+
 // workhoursday working hours per day
 const workhoursday = 8
 
@@ -168,6 +187,55 @@ func (sim *simulation) burndownMinWip(day int) {
 	}
 }
 
+// burndownSjf burn down shortest job first
+func (sim *simulation) burndownSjf(day int) {
+	d1 := day + 1
+	// no burndown without ticket or on last day
+	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
+		return
+	}
+	// copy sim and sort copy, then burn down
+	scp := make(simulation, len(*sim))
+	for i, t := range *sim {
+		scp[i] = t
+	}
+	sort.Slice(scp, func(i, j int) bool {
+		ti := scp[i]
+		tj := scp[j]
+		return ti.burndown[day] < tj.burndown[day]
+	})
+	hoursleft := workhoursday
+	for _, t := range scp {
+		hoursleft = t.burndownhours(day, hoursleft, hoursleft)
+	}
+}
+
+// burndownWsjf burn down weightest shortest job first older jobs have priority
+func (sim *simulation) burndownWsjf(day int) {
+	d1 := day + 1
+	// no burndown without ticket or on last day
+	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
+		return
+	}
+	// copy sim and sort copy, then burn down
+	scp := make(simulation, len(*sim))
+	for i, t := range *sim {
+		scp[i] = t
+	}
+	sort.Slice(scp, func(i, j int) bool {
+		ti := scp[i]
+		tj := scp[j]
+		if ti.startday < tj.startday {
+			return true
+		}
+		return ti.burndown[day] < tj.burndown[day]
+	})
+	hoursleft := workhoursday
+	for _, t := range scp {
+		hoursleft = t.burndownhours(day, hoursleft, hoursleft)
+	}
+}
+
 func main() {
 	days := 20
 	meanNewPerDay := 1.0
@@ -179,6 +247,8 @@ func main() {
 	sumEffort := 0
 	simMaxWip := make(simulation, 0, days*3/2)
 	simMinWip := make(simulation, 0, days*3/2)
+	simSjf := make(simulation, 0, days*3/2)
+	simWsjf := make(simulation, 0, days*3/2)
 	for d := 0; d < days; d++ {
 		count := randomValueInt(meanNewPerDay, stddevNewPerDay, 0)
 		sumCount += count
@@ -188,6 +258,10 @@ func main() {
 		simMaxWip.burndownMaxWip(d)
 		simMinWip = simMinWip.addTickets(tickets)
 		simMinWip.burndownMinWip(d)
+		simSjf = simSjf.addTickets(tickets)
+		simSjf.burndownSjf(d)
+		simWsjf = simWsjf.addTickets(tickets)
+		simWsjf.burndownWsjf(d)
 		sumEffort += effort
 
 	}
@@ -198,8 +272,15 @@ func main() {
 	fmt.Println("mean effort:", meanEffort)
 	fmt.Println()
 	fmt.Println("Max WIP")
+	fmt.Println(simMaxWip.statsLeadTime())
 	fmt.Println(simMaxWip)
-	fmt.Println()
 	fmt.Println("Min WIP")
+	fmt.Println(simMinWip.statsLeadTime())
 	fmt.Println(simMinWip)
+	fmt.Println("Sjf")
+	fmt.Println(simSjf.statsLeadTime())
+	fmt.Println(simSjf)
+	fmt.Println("Wsjf")
+	fmt.Println(simWsjf.statsLeadTime())
+	fmt.Println(simWsjf)
 }
