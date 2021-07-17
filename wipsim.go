@@ -236,6 +236,53 @@ func (sim *simulation) burndownWsjf(day int) {
 	}
 }
 
+// simulationset the set of simulations
+type simulationset []simulation
+
+// NewSimulationset create the set of simulations
+func NewSimulationset(days int) simulationset {
+	sz := days * 3 / 2 // some more size avoid reallocation
+	cnt := 4
+	simset := make(simulationset, cnt)
+	for i := 0; i < cnt; i++ {
+		simset[i] = make(simulation, 0, sz)
+	}
+	return simset
+}
+
+func (simset simulationset) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintln("Max WIP"))
+	buf.WriteString(fmt.Sprintln(simset[0].statsLeadTime()))
+	buf.WriteString(fmt.Sprintln(simset[0]))
+	buf.WriteString(fmt.Sprintln("Min WIP"))
+	buf.WriteString(fmt.Sprintln(simset[1].statsLeadTime()))
+	buf.WriteString(fmt.Sprintln(simset[1]))
+	buf.WriteString(fmt.Sprintln("Sjf"))
+	buf.WriteString(fmt.Sprintln(simset[2].statsLeadTime()))
+	buf.WriteString(fmt.Sprintln(simset[2]))
+	buf.WriteString(fmt.Sprintln("Wsjf"))
+	buf.WriteString(fmt.Sprintln(simset[3].statsLeadTime()))
+	buf.WriteString(fmt.Sprintln(simset[3]))
+	return buf.String()
+}
+
+// addTickets add the tickets to each simulation
+func (simset simulationset) addTickets(ts []*ticket) simulationset {
+	for i, s := range simset {
+		simset[i] = s.addTickets(ts)
+	}
+	return simset
+}
+
+// addTickets add the tickets to each simulation
+func (simset simulationset) burndown(day int) {
+	simset[0].burndownMaxWip(day)
+	simset[1].burndownMinWip(day)
+	simset[2].burndownSjf(day)
+	simset[3].burndownWsjf(day)
+}
+
 func main() {
 	days := 20
 	meanNewPerDay := 1.0
@@ -245,23 +292,14 @@ func main() {
 	stddevEffortNew := 4.0
 	minEffort := 1
 	sumEffort := 0
-	simMaxWip := make(simulation, 0, days*3/2)
-	simMinWip := make(simulation, 0, days*3/2)
-	simSjf := make(simulation, 0, days*3/2)
-	simWsjf := make(simulation, 0, days*3/2)
+	simset := NewSimulationset(days)
 	for d := 0; d < days; d++ {
 		count := randomValueInt(meanNewPerDay, stddevNewPerDay, 0)
 		sumCount += count
 		tickets, effort := createTicketsForDay(d, days, count,
 			meanEffortNew, stddevEffortNew, minEffort)
-		simMaxWip = simMaxWip.addTickets(tickets)
-		simMaxWip.burndownMaxWip(d)
-		simMinWip = simMinWip.addTickets(tickets)
-		simMinWip.burndownMinWip(d)
-		simSjf = simSjf.addTickets(tickets)
-		simSjf.burndownSjf(d)
-		simWsjf = simWsjf.addTickets(tickets)
-		simWsjf.burndownWsjf(d)
+		simset = simset.addTickets(tickets)
+		simset.burndown(d)
 		sumEffort += effort
 
 	}
@@ -271,16 +309,5 @@ func main() {
 	meanEffort := float64(sumEffort) / float64(days)
 	fmt.Println("mean effort:", meanEffort)
 	fmt.Println()
-	fmt.Println("Max WIP")
-	fmt.Println(simMaxWip.statsLeadTime())
-	fmt.Println(simMaxWip)
-	fmt.Println("Min WIP")
-	fmt.Println(simMinWip.statsLeadTime())
-	fmt.Println(simMinWip)
-	fmt.Println("Sjf")
-	fmt.Println(simSjf.statsLeadTime())
-	fmt.Println(simSjf)
-	fmt.Println("Wsjf")
-	fmt.Println(simWsjf.statsLeadTime())
-	fmt.Println(simWsjf)
+	fmt.Println(simset)
 }
