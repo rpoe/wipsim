@@ -7,9 +7,13 @@
 // Tickets have an effort in hours, with a gaussian distribution, with
 // mean 6h and standard deviation of 4h.
 // Troughput is fixed to 8h per day
-// Two scheduling strategies are compared:
+// Five scheduling strategies are compared:
 // 1. Work on each ticket max 2h per day.
 // 2. Work on the tickets in order of arrival
+// 3. Work on the ticket with the shortest remaining work first
+// 4. Work on the yesterdays tickets first, then on shortest
+// 5. Divide remaining work by number of days open and work on ticket with
+//    smallest weight first
 //
 // Ralf Poeppel 2021
 //
@@ -18,10 +22,15 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
+	"os"
 	"sort"
+	"strconv"
 )
+
+const maxPrint = 20 // when to print details
 
 // randomValueInt calculates a random int value from a
 // gaussian distribution with mean and standard deviation
@@ -39,12 +48,12 @@ func randomValueInt(mean, stddev float64, lowest int) int {
 // ticket the state of a ticket
 type ticket struct {
 	startday int
-	endday   int
 	leadtime int
+	endday   int
 	effort   int
-	// burndown the remaining effort of a ticket at a day.
+	// remaining the remaining effort of a ticket at a day.
 	// The day is the index in the array.
-	burndown []int
+	remaining []int
 }
 
 // NewTicket create a new ticket
@@ -52,8 +61,8 @@ func NewTicket(startday, effort, totaldays int) *ticket {
 	t := ticket{}
 	t.startday = startday
 	t.effort = effort
-	t.burndown = make([]int, totaldays)
-	t.burndown[startday] = effort
+	t.remaining = make([]int, totaldays)
+	t.remaining[startday] = effort
 	return &t
 }
 
@@ -62,8 +71,8 @@ func (t *ticket) Clone() *ticket {
 	cp := ticket{}
 	cp.startday = t.startday
 	cp.effort = t.effort
-	cp.burndown = make([]int, 0, len(t.burndown))
-	cp.burndown = append(cp.burndown, t.burndown...)
+	cp.remaining = make([]int, 0, len(t.remaining))
+	cp.remaining = append(cp.remaining, t.remaining...)
 	return &cp
 }
 
@@ -78,19 +87,22 @@ func createTicketsForDay(d, days, count int, meanEffortNew, stddevEffortNew floa
 			minEffort)
 		sumEffort += effort
 		ticket := NewTicket(d, effort, days)
-		fmt.Println(d, count, effort, ticket)
+		if days <= maxPrint {
+			fmt.Println(d, count, effort, ticket)
+		}
 		tickets[i] = ticket
 	}
-	if count == 0 {
+	if count == 0 && days <= maxPrint {
 		fmt.Println(d, count)
 	}
 	return tickets, sumEffort
 }
 
-// burndown burn down a ticket, max for the given hours and return updated hoursleft
+// burndownhours burn down a ticket, max for the given hours
+// and return updated hoursleft
 func (t *ticket) burndownhours(day, hoursleft, hours int) int {
 	d1 := day + 1
-	workremain := t.burndown[day]
+	workremain := t.remaining[day]
 	if workremain > 0 {
 		// calculate possible burndown
 		if hoursleft > 0 {
@@ -107,30 +119,45 @@ func (t *ticket) burndownhours(day, hoursleft, hours int) int {
 		t.endday = day
 		t.leadtime = d1 - t.startday
 	}
-	t.burndown[d1] = workremain
+	t.remaining[d1] = workremain
 	return hoursleft
 }
 
 // simulation the set of all tickets
-type simulation []*ticket
+//type simulation []*ticket
+type simulation struct {
+	name         string
+	burndownaday func(*simulation, int)
+	tickets      []*ticket
+}
 
-// String create nice representation
-func (sim simulation) String() string {
-	var buf bytes.Buffer
-	for i, t := range sim {
-		buf.WriteString(fmt.Sprintln(i, *t))
-	}
-	return buf.String()
+// NewSimulation create a simulation
+func NewSimulation(name string, burndownaday func(*simulation, int), size int) simulation {
+	sim := simulation{}
+	sim.name = name
+	sim.burndownaday = burndownaday
+	sim.tickets = make([]*ticket, 0, size)
+	return sim
 }
 
 // addTickets add a copy of the given tickets to the simulation
 func (sim simulation) addTickets(ts []*ticket) simulation {
-	s := sim
+	sts := sim.tickets
 	for _, t := range ts {
 		tcp := t.Clone()
-		s = append(s, tcp)
+		sts = append(sts, tcp)
 	}
-	return s
+	sim.tickets = sts
+	return sim
+}
+
+// copyTickets return sim.tickets copy
+func (sim *simulation) copyTickets() []*ticket {
+	tscp := make([]*ticket, len((*sim).tickets))
+	for i, t := range (*sim).tickets {
+		tscp[i] = t
+	}
+	return tscp
 }
 
 // statsLeadTime return average and standard deviation
@@ -138,100 +165,108 @@ func (sim simulation) addTickets(ts []*ticket) simulation {
 func (sim simulation) statsLeadTime() (float64, float64, float64) {
 	var sum float64 = 0.0
 	var sumSq float64 = 0.0
-	for _, t := range sim {
+	for _, t := range sim.tickets {
 		l := float64(t.leadtime)
 		sum += l
 		sumSq += l * l
 	}
 	// calculate the mean/std.dev
-	l := float64(len(sim))
+	l := float64(len(sim.tickets))
 	meanSq := sumSq / l
 	mean := sum / l
 	stdev := math.Sqrt(meanSq - mean*mean)
 	return mean, stdev, mean + stdev
 }
 
+// String create nice representation
+func (sim simulation) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintln(sim.name))
+	m, s, ms := sim.statsLeadTime()
+	frmt := "Leadtime of tickets mean: %.2f stdev: %.2f mean+stdev: %.2f\n"
+	buf.WriteString(fmt.Sprintf(frmt, m, s, ms))
+	if len(sim.tickets) <= maxPrint {
+		header := "# start leadtime end effort [remaining per day]\n"
+		buf.WriteString(header)
+		for i, t := range sim.tickets {
+			buf.WriteString(fmt.Sprintln(i, *t))
+		}
+	}
+	return buf.String()
+}
+
 // workhoursday working hours per day
 const workhoursday = 8
 
-// burndownMaxWip burn down maximum number of tickets, each 2h for a day
-func (sim *simulation) burndownMaxWip(day int) {
-	d1 := day + 1
-	// no burndown without ticket or on last day
-	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
-		return
-	}
+// burndownMaxWip burn down maximum number of tickets in work, try each 2h for a day
+func burndownMaxWip(sim *simulation, day int) {
 	hourswork := 2
 	hoursleft := workhoursday
-	for _, t := range *sim {
+	for _, t := range (*sim).tickets {
 		hoursleft = t.burndownhours(day, hoursleft, hourswork)
 	}
 	if hoursleft > 0 {
 		// burn hours left
-		for _, t := range *sim {
+		for _, t := range (*sim).tickets {
 			hoursleft = t.burndownhours(day, hoursleft, hoursleft)
 		}
 	}
 }
 
-// burndownMinWip burn down the oldest tickets first
-func (sim *simulation) burndownMinWip(day int) {
-	d1 := day + 1
-	// no burndown without ticket or on last day
-	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
-		return
-	}
+// burndownOldestFirst burn down the oldest tickets first
+func burndownOldestFirst(sim *simulation, day int) {
 	hoursleft := workhoursday
-	for _, t := range *sim {
+	for _, t := range (*sim).tickets {
 		hoursleft = t.burndownhours(day, hoursleft, hoursleft)
 	}
 }
 
 // burndownSjf burn down shortest job first
-func (sim *simulation) burndownSjf(day int) {
-	d1 := day + 1
-	// no burndown without ticket or on last day
-	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
-		return
-	}
-	// copy sim and sort copy, then burn down
-	scp := make(simulation, len(*sim))
-	for i, t := range *sim {
-		scp[i] = t
-	}
-	sort.Slice(scp, func(i, j int) bool {
-		ti := scp[i]
-		tj := scp[j]
-		return ti.burndown[day] < tj.burndown[day]
+func burndownSjf(sim *simulation, day int) {
+	// copy sim.tickets and sort copy, then burn down
+	tscp := sim.copyTickets()
+	sort.Slice(tscp, func(i, j int) bool {
+		ti := tscp[i]
+		tj := tscp[j]
+		return ti.remaining[day] < tj.remaining[day]
 	})
 	hoursleft := workhoursday
-	for _, t := range scp {
+	for _, t := range tscp {
 		hoursleft = t.burndownhours(day, hoursleft, hoursleft)
 	}
 }
 
-// burndownWsjf burn down weightest shortest job first older jobs have priority
-func (sim *simulation) burndownWsjf(day int) {
-	d1 := day + 1
-	// no burndown without ticket or on last day
-	if len(*sim) <= 0 || d1 >= len((*(*sim)[0]).burndown) {
-		return
-	}
+// burndownOsjf burn down shortest job first, older jobs have priority
+func burndownOsjf(sim *simulation, day int) {
 	// copy sim and sort copy, then burn down
-	scp := make(simulation, len(*sim))
-	for i, t := range *sim {
-		scp[i] = t
-	}
-	sort.Slice(scp, func(i, j int) bool {
-		ti := scp[i]
-		tj := scp[j]
+	tscp := sim.copyTickets()
+	sort.Slice(tscp, func(i, j int) bool {
+		ti := tscp[i]
+		tj := tscp[j]
 		if ti.startday < tj.startday {
 			return true
 		}
-		return ti.burndown[day] < tj.burndown[day]
+		return ti.remaining[day] < tj.remaining[day]
 	})
 	hoursleft := workhoursday
-	for _, t := range scp {
+	for _, t := range tscp {
+		hoursleft = t.burndownhours(day, hoursleft, hoursleft)
+	}
+}
+
+// burndownAwsjf burn down age weighted, shortest job first
+func burndownAwsjf(sim *simulation, day int) {
+	// copy sim and sort copy, then burn down
+	tscp := sim.copyTickets()
+	sort.Slice(tscp, func(i, j int) bool {
+		ti := tscp[i]
+		tj := tscp[j]
+		wi := day + 1 - ti.startday
+		wj := day + 1 - tj.startday
+		return ti.remaining[day]/wi < tj.remaining[day]/wj
+	})
+	hoursleft := workhoursday
+	for _, t := range tscp {
 		hoursleft = t.burndownhours(day, hoursleft, hoursleft)
 	}
 }
@@ -242,28 +277,21 @@ type simulationset []simulation
 // NewSimulationset create the set of simulations
 func NewSimulationset(days int) simulationset {
 	sz := days * 3 / 2 // some more size avoid reallocation
-	cnt := 4
+	cnt := 5
 	simset := make(simulationset, cnt)
-	for i := 0; i < cnt; i++ {
-		simset[i] = make(simulation, 0, sz)
-	}
+	simset[0] = NewSimulation("Equal working", burndownMaxWip, sz)
+	simset[1] = NewSimulation("Oldest first", burndownOldestFirst, sz)
+	simset[2] = NewSimulation("Shortest first", burndownSjf, sz)
+	simset[3] = NewSimulation("Oldest, shortest first", burndownOsjf, sz)
+	simset[4] = NewSimulation("Age weighted, shortest first", burndownAwsjf, sz)
 	return simset
 }
 
 func (simset simulationset) String() string {
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintln("Max WIP"))
-	buf.WriteString(fmt.Sprintln(simset[0].statsLeadTime()))
-	buf.WriteString(fmt.Sprintln(simset[0]))
-	buf.WriteString(fmt.Sprintln("Min WIP"))
-	buf.WriteString(fmt.Sprintln(simset[1].statsLeadTime()))
-	buf.WriteString(fmt.Sprintln(simset[1]))
-	buf.WriteString(fmt.Sprintln("Sjf"))
-	buf.WriteString(fmt.Sprintln(simset[2].statsLeadTime()))
-	buf.WriteString(fmt.Sprintln(simset[2]))
-	buf.WriteString(fmt.Sprintln("Wsjf"))
-	buf.WriteString(fmt.Sprintln(simset[3].statsLeadTime()))
-	buf.WriteString(fmt.Sprintln(simset[3]))
+	for _, s := range simset {
+		buf.WriteString(fmt.Sprintln(s))
+	}
 	return buf.String()
 }
 
@@ -275,16 +303,39 @@ func (simset simulationset) addTickets(ts []*ticket) simulationset {
 	return simset
 }
 
-// addTickets add the tickets to each simulation
+// burndown the tickets in each simulation
 func (simset simulationset) burndown(day int) {
-	simset[0].burndownMaxWip(day)
-	simset[1].burndownMinWip(day)
-	simset[2].burndownSjf(day)
-	simset[3].burndownWsjf(day)
+	for _, s := range simset {
+		s.burndownaday(&s, day)
+	}
+}
+
+// simdays read number of days to simulate from args, use default if none is given,
+// log fatal if not readable
+func simdays() int {
+	a := os.Args
+	if len(a) <= 1 {
+		return maxPrint // the default
+	}
+	d, err := strconv.Atoi(a[1])
+	if err != nil || len(a) > 2 {
+		log.Fatal("usage: " + a[0] + " <n>")
+	}
+	return d
+}
+
+func printSimulatedDataHeader(days int) {
+	fmt.Println("Simulating", days, "days")
+	if days <= maxPrint {
+		header := "day, count, effort, ticket{start leadtime end effort" +
+			" [remaining/day]}"
+		fmt.Println(header)
+	}
 }
 
 func main() {
-	days := 20
+	days := simdays()
+	printSimulatedDataHeader(days)
 	meanNewPerDay := 1.0
 	stddevNewPerDay := 1.0
 	sumCount := 0
@@ -299,15 +350,18 @@ func main() {
 		tickets, effort := createTicketsForDay(d, days, count,
 			meanEffortNew, stddevEffortNew, minEffort)
 		simset = simset.addTickets(tickets)
-		simset.burndown(d)
+		// burndown on all days except last day
+		if d < days-1 {
+			simset.burndown(d)
+		}
 		sumEffort += effort
 
 	}
 	fmt.Println()
 	meanCount := float64(sumCount) / float64(days)
-	fmt.Println("mean count:", meanCount)
+	fmt.Println("mean ticket count per day:", meanCount)
 	meanEffort := float64(sumEffort) / float64(days)
-	fmt.Println("mean effort:", meanEffort)
+	fmt.Println("mean ticket effort per day:", meanEffort)
 	fmt.Println()
 	fmt.Println(simset)
 }
