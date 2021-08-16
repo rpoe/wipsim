@@ -1,12 +1,12 @@
 // Package main implements a ticket servicing system simulation.
 // The simulation shows the effect of limiting work in progress
 // on the lead time of tickets.
-// The simulation runs for 100 days.
+// The simulation runs for a given number of days, default is 20 days.
 // Tickets arrive with a gaussian distribution, with mean 1 Ticket per day
-// and standard deviation of 1d.
+// and standard deviation of 1 day.
 // Tickets have an effort in hours, with a gaussian distribution, with
-// mean 6h and standard deviation of 4h.
-// Troughput is fixed to 8h per day
+// mean 6 h and standard deviation of 4 h.
+// Troughput is fixed to 8 h per day
 // Five scheduling strategies are compared:
 // 1. Work on each ticket max 2h per day.
 // 2. Work on the tickets in order of arrival
@@ -124,7 +124,6 @@ func (t *ticket) burndownhours(day, hoursleft, hours int) int {
 }
 
 // simulation the set of all tickets
-//type simulation []*ticket
 type simulation struct {
 	name         string
 	burndownaday func(*simulation, int)
