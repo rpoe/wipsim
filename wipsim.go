@@ -103,6 +103,12 @@ func createTicketsForDay(d, days, count int, meanEffortNew, stddevEffortNew floa
 func (t *ticket) burndownhours(day, hoursleft, hours int) int {
 	d1 := day + 1
 	workremain := t.remaining[day]
+	wkremaind1 := t.remaining[d1]
+	if wkremaind1 > 0 {
+		// function may be called more then once for a day,
+		// then wkremaind1 is already set
+		workremain = wkremaind1
+	}
 	if workremain > 0 {
 		// calculate possible burndown
 		if hoursleft > 0 {
@@ -182,10 +188,10 @@ func (sim simulation) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintln(sim.name))
 	m, s, ms := sim.statsLeadTime()
-	frmt := "Leadtime of tickets mean: %.2f stdev: %.2f mean+stdev: %.2f\n"
-	buf.WriteString(fmt.Sprintf(frmt, m, s, ms))
+	frmt := "Leadtime of tickets mean: %.2f stdev: %.2f mean+stdev(%v): %.2f\n"
+	buf.WriteString(fmt.Sprintf(frmt, m, s, "74%", ms))
 	if len(sim.tickets) <= maxPrint {
-		header := "# start leadtime end effort [remaining per day]\n"
+		header := "# startday leadtime endday effort [remaining per day]\n"
 		buf.WriteString(header)
 		for i, t := range sim.tickets {
 			buf.WriteString(fmt.Sprintln(i, *t))
@@ -326,7 +332,7 @@ func simdays() int {
 func printSimulatedDataHeader(days int) {
 	fmt.Println("Simulating", days, "days")
 	if days <= maxPrint {
-		header := "day, count, effort, ticket{start leadtime end effort" +
+		header := "day, count, effort, ticket{startday leadtime endday effort" +
 			" [remaining/day]}"
 		fmt.Println(header)
 	}
